@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "cmd_id": { "type": "string" },
+    "seq": { "type": "integer" },
+    "uptime_ms": { "type": "integer" },
+    "status": { "type": "string", "enum": ["accepted", "completed", "rejected", "expired", "duplicate", "failed"] },
+    "reason": { "type": "string" }
+  },
+  "required": ["schema_version", "cmd_id", "seq", "uptime_ms", "status"],
+  "additionalProperties": false
+}

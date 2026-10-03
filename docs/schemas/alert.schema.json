@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "seq": { "type": "integer" },
+    "uptime_ms": { "type": "integer" },
+    "alert_id": { "type": "string" },
+    "severity": { "type": "string", "enum": ["warning", "error", "critical"] },
+    "code": { "type": "string", "enum": ["STALE_SENSOR", "TEPT_STUCK", "TEPT_SATURATED", "INA219_FAIL", "MOTOR_STALL", "ANGLE_LIMIT", "CMD_EXPIRED", "UNDERVOLTAGE", "OVERVOLTAGE"] },
+    "message": { "type": "string" }
+  },
+  "required": ["schema_version", "seq", "uptime_ms", "alert_id", "severity", "code", "message"],
+  "additionalProperties": false
+}

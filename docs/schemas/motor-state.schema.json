@@ -1,0 +1,20 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "seq": { "type": "integer" },
+    "uptime_ms": { "type": "integer" },
+    "mode": { "type": "string", "enum": ["auto", "manual", "go_to_angle", "idle", "fault"] },
+    "motor_enabled": { "type": "boolean" },
+    "motor_moving": { "type": "boolean" },
+    "panel_angle_deg": { "type": "number" },
+    "motor_steps": { "type": "integer" },
+    "target_angle_deg": { "type": "number" }
+  },
+  "required": [
+    "schema_version", "seq", "uptime_ms", "mode", "motor_enabled",
+    "motor_moving", "panel_angle_deg", "motor_steps"
+  ],
+  "additionalProperties": false
+}

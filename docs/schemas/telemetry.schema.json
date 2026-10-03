@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "seq": { "type": "integer", "minimum": 0 },
+    "uptime_ms": { "type": "integer", "minimum": 0 },
+    "voltage_v": { "type": "number", "minimum": 0, "maximum": 15 },
+    "current_a": { "type": "number", "minimum": -1, "maximum": 2 },
+    "power_w": { "type": "number", "minimum": -5, "maximum": 10 },
+    "panel_angle_deg": { "type": "number", "minimum": -90, "maximum": 90 },
+    "motor_steps": { "type": "integer" },
+    "tept_top": { "type": "integer", "minimum": 0, "maximum": 4095 },
+    "tept_bottom": { "type": "integer", "minimum": 0, "maximum": 4095 },
+    "tept_left": { "type": "integer", "minimum": 0, "maximum": 4095 },
+    "tept_right": { "type": "integer", "minimum": 0, "maximum": 4095 },
+    "ina219_ok": { "type": "boolean" },
+    "sensors_ok": { "type": "boolean" },
+    "mode": { "type": "string", "enum": ["auto", "manual", "go_to_angle", "idle", "fault"] }
+  },
+  "required": [
+    "schema_version", "seq", "uptime_ms", "voltage_v", "current_a", "power_w",
+    "panel_angle_deg", "motor_steps", "tept_top", "tept_bottom", "tept_left",
+    "tept_right", "ina219_ok", "sensors_ok", "mode"
+  ],
+  "additionalProperties": false
+}

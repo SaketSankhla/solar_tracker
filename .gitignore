@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+dist/
+*.egg-info/
+venv/
+.venv/
+env/
+*.egg
+
+# Node / React
+node_modules/
+.DS_Store
+*.local
+
+# PlatformIO
+firmware/esp32/.pio/
+firmware/esp32/.pioenvs/
+firmware/esp32/.piolibdeps/
+
+# Secrets — NEVER commit these
+secrets.h
+.env
+
+# SQLite
+*.db
+*.db-shm
+*.db-wal
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project logs & runtime pid
+.server.pid
+*.log
+.pytest_cache/
+dashboard/dist/

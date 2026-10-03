@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>☀️ Smart Solar Tracker Dashboard</title>
+  <script src="/static/chart.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1e212b;
+      --surface-border: #2d313f;
+      --text: #f1f5f9;
+      --text-muted: #94a3b8;
+      --accent: #22c55e;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --blue: #38bdf8;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 1.5rem;
+      min-height: 100vh;
+    }
+
+    .container { max-width: 1200px; margin: 0 auto; }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1.5rem;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+    }
+    h1 { font-size: 1.6rem; display: flex; align-items: center; gap: 0.5rem; }
+    .subtitle { font-size: 0.85rem; color: var(--text-muted); }
+
+    .live-badge {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: var(--surface);
+      border: 1px solid var(--surface-border);
+      padding: 0.4rem 0.8rem;
+      border-radius: 20px;
+      font-size: 0.85rem;
+    }
+    .dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: var(--danger);
+      transition: background 0.3s;
+    }
+    .dot.connected { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+
+    /* Grid Layout */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--surface-border);
+      border-radius: 10px;
+      padding: 1.25rem;
+    }
+    .card h3 {
+      font-size: 1rem;
+      color: var(--text-muted);
+      margin-bottom: 1rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .stat-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 0.35rem 0;
+      font-size: 0.95rem;
+    }
+    .stat-row.bold { font-weight: 700; font-size: 1.05rem; }
+    .stat-val { font-family: monospace; font-size: 1.05rem; }
+
+    /* Badges */
+    .badge {
+      display: inline-block;
+      padding: 0.2rem 0.6rem;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .badge.auto { background: rgba(34, 197, 94, 0.15); color: var(--accent); }
+    .badge.manual { background: rgba(56, 189, 248, 0.15); color: var(--blue); }
+    .badge.idle { background: rgba(148, 163, 184, 0.15); color: var(--text-muted); }
+    .badge.fault { background: rgba(239, 68, 68, 0.15); color: var(--danger); }
+
+    .ai-status-box {
+      margin-top: 0.75rem;
+      padding: 0.6rem;
+      border-radius: 6px;
+      background: rgba(15, 17, 23, 0.6);
+      font-size: 0.85rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    /* Charts & Controls Grid */
+    .row-2 {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 1rem;
+    }
+    @media (max-width: 850px) {
+      .row-2 { grid-template-columns: 1fr; }
+    }
+
+    .chart-container {
+      position: relative;
+      height: 320px;
+      width: 100%;
+    }
+
+    /* Buttons */
+    .btn-group { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem; }
+    button {
+      background: #2d313f;
+      color: var(--text);
+      border: 1px solid #3e4456;
+      padding: 0.55rem 1rem;
+      border-radius: 6px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    button:hover { background: #3b4255; }
+    button.btn-primary { background: var(--accent); color: #000; border: none; }
+    button.btn-primary:hover { background: #1eb054; }
+    button.btn-danger { background: var(--danger); color: #fff; border: none; }
+    button.btn-danger:hover { background: #dc2626; }
+
+    input {
+      background: #0f1117;
+      border: 1px solid var(--surface-border);
+      color: var(--text);
+      padding: 0.5rem 0.75rem;
+      border-radius: 6px;
+      font-size: 0.9rem;
+    }
+
+    .status-msg {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      margin-top: 0.5rem;
+      min-height: 1.2rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div>
+        <h1>☀️ Smart Solar Tracker Dashboard</h1>
+        <div class="subtitle">Autonomous Single-Axis Tracking & Energy Analytics</div>
+      </div>
+      <div class="live-badge">
+        <span class="dot" id="ws-dot"></span>
+        <span id="ws-status">Connecting...</span>
+      </div>
+    </header>
+
+    <!-- Top Stats Grid -->
+    <div class="grid">
+      <!-- 1. Status Card -->
+      <div class="card">
+        <h3>Device Status <span class="badge auto" id="mode-badge">AUTO</span></h3>
+        <div class="stat-row">
+          <span class="text-muted">Panel Angle</span>
+          <span class="stat-val" id="angle-val">0.0°</span>
+        </div>
+        <div class="stat-row">
+          <span class="text-muted">Motor Steps</span>
+          <span class="stat-val" id="steps-val">0</span>
+        </div>
+        <div class="stat-row">
+          <span class="text-muted">ESP32 Uptime</span>
+          <span class="stat-val" id="uptime-val">0s</span>
+        </div>
+      </div>
+
+      <!-- 2. Real Power Card -->
+      <div class="card">
+        <h3>Real Power</h3>
+        <div class="stat-row">
+          <span class="text-muted">Bus Voltage</span>
+          <span class="stat-val" id="voltage-val">0.00 V</span>
+        </div>
+        <div class="stat-row">
+          <span class="text-muted">Current</span>
+          <span class="stat-val" id="current-val">0.000 A</span>
+        </div>
+        <div class="stat-row bold">
+          <span style="color: var(--accent);">Measured Power</span>
+          <span class="stat-val" style="color: var(--accent);" id="power-val">0.00 W</span>
+        </div>
+      </div>
+
+      <!-- 3. AI Prediction Card -->
+      <div class="card" style="border-left: 4px solid var(--accent);" id="ai-card">
+        <h3><span>🧠 AI Expected Power</span> <span style="font-size:0.75rem; color:var(--blue);" id="ai-model">rf-power-v1</span></h3>
+        <div class="stat-row">
+          <span class="text-muted">AI Expected</span>
+          <span class="stat-val" id="ai-expected">0.00 W</span>
+        </div>
+        <div class="stat-row">
+          <span class="text-muted">Power Deficit</span>
+          <span class="stat-val" id="ai-deficit">0.00 W</span>
+        </div>
+        <div class="stat-row bold">
+          <span class="text-muted">Efficiency</span>
+          <span class="stat-val" style="color:var(--accent);" id="ai-efficiency">100%</span>
+        </div>
+        <div class="ai-status-box" id="ai-status-box">
+          <span style="width:8px; height:8px; border-radius:50%; background:var(--accent);" id="ai-status-dot"></span>
+          <span id="ai-status-text">Awaiting data...</span>
+        </div>
+      </div>
+
+      <!-- 4. Sensors Health Card -->
+      <div class="card">
+        <h3>Sensors Health</h3>
+        <div class="stat-row">
+          <span class="text-muted">TEPT Left / Right</span>
+          <span class="stat-val" id="tept-lr">0 / 0</span>
+        </div>
+        <div class="stat-row">
+          <span class="text-muted">TEPT Top / Bot</span>
+          <span class="stat-val" id="tept-tb">0 / 0</span>
+        </div>
+        <div class="stat-row">
+          <span class="text-muted">INA219 Power Chip</span>
+          <span class="badge auto" id="ina-badge">OK</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Charts & Controls Row -->
+    <div class="row-2">
+      <!-- Live Scrolling Chart -->
+      <div class="card">
+        <h3>Live Electrical & Tracking Stream</h3>
+        <div class="chart-container">
+          <canvas id="liveChart"></canvas>
+        </div>
+      </div>
+
+      <!-- Control Panel -->
+      <div class="card">
+        <h3>Manual Controls</h3>
+        <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.75rem;">
+          Control modes or send precise angle targets.
+        </p>
+        
+        <div class="btn-group">
+          <button class="btn-primary" onclick="sendCmd('set_mode', {mode: 'auto'})">AUTO</button>
+          <button onclick="sendCmd('set_mode', {mode: 'manual'})">MANUAL</button>
+          <button onclick="sendCmd('set_mode', {mode: 'idle'})">IDLE</button>
+          <button class="btn-danger" onclick="sendCmd('stop', {})">STOP</button>
+        </div>
+
+        <div style="margin-top: 1rem;">
+          <label style="font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 0.4rem;">Target Angle (°):</label>
+          <div style="display: flex; gap: 0.5rem;">
+            <input type="number" id="target-angle-input" value="0" min="-85" max="85" style="width: 90px;">
+            <button onclick="sendAngle()">Go To Angle</button>
+          </div>
+        </div>
+
+        <div style="margin-top: 1.25rem;">
+          <label style="font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 0.4rem;">API Key (if required):</label>
+          <input type="password" id="api-key-input" value="changeme-api-key" style="width: 100%;">
+        </div>
+
+        <div class="status-msg" id="cmd-status"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // -------------------------------------------------------------
+    // 1. Chart.js Setup
+    // -------------------------------------------------------------
+    const ctx = document.getElementById('liveChart').getContext('2d');
+    const MAX_POINTS = 35;
+    
+    const chart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [
+          {
+            label: 'Measured Power (W)',
+            borderColor: '#22c55e',
+            backgroundColor: 'rgba(34, 197, 94, 0.1)',
+            data: [],
+            borderWidth: 2,
+            tension: 0.3,
+            pointRadius: 0,
+            yAxisID: 'y'
+          },
+          {
+            label: 'Panel Angle (°)',
+            borderColor: '#38bdf8',
+            data: [],
+            borderWidth: 2,
+            borderDash: [5, 5],
+            tension: 0.1,
+            pointRadius: 0,
+            yAxisID: 'y1'
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 300 },
+        scales: {
+          x: { grid: { color: '#2d313f' }, ticks: { color: '#94a3b8' } },
+          y: { 
+            position: 'left',
+            grid: { color: '#2d313f' },
+            ticks: { color: '#94a3b8' },
+            title: { display: true, text: 'Watts', color: '#22c55e' },
+            min: 0, max: 3.5
+          },
+          y1: {
+            position: 'right',
+            grid: { drawOnChartArea: false },
+            ticks: { color: '#94a3b8' },
+            title: { display: true, text: 'Degrees (°)', color: '#38bdf8' },
+            min: -90, max: 90
+          }
+        },
+        plugins: {
+          legend: { labels: { color: '#f1f5f9' } }
+        }
+      }
+    });
+
+    // -------------------------------------------------------------
+    // 2. WebSocket Real-Time Stream (<15ms latency)
+    // -------------------------------------------------------------
+    const wsDot = document.getElementById('ws-dot');
+    const wsStatus = document.getElementById('ws-status');
+    let ws;
+
+    function connectWS() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}/ws/live`;
+      
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        wsDot.classList.add('connected');
+        wsStatus.textContent = 'Live Stream';
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'telemetry') {
+            updateDashboard(msg.data, msg.ai_insight);
+          }
+        } catch (e) {
+          console.error('Error parsing WS message:', e);
+        }
+      };
+
+      ws.onclose = () => {
+        wsDot.classList.remove('connected');
+        wsStatus.textContent = 'Reconnecting...';
+        setTimeout(connectWS, 2500);
+      };
+
+      ws.onerror = () => ws.close();
+    }
+
+    // -------------------------------------------------------------
+    // 3. Update Dashboard Numbers & Graphs
+    // -------------------------------------------------------------
+    function updateDashboard(t, ai) {
+      if (!t) return;
+
+      // Status Card
+      document.getElementById('angle-val').textContent = `${t.panel_angle_deg.toFixed(1)}°`;
+      document.getElementById('steps-val').textContent = t.motor_steps;
+      document.getElementById('uptime-val').textContent = `${Math.floor(t.uptime_ms / 1000)}s`;
+
+      const modeBadge = document.getElementById('mode-badge');
+      modeBadge.textContent = (t.mode || 'auto').toUpperCase();
+      modeBadge.className = `badge ${t.mode || 'auto'}`;
+
+      // Electrical Data
+      document.getElementById('voltage-val').textContent = `${t.voltage_v.toFixed(2)} V`;
+      document.getElementById('current-val').textContent = `${t.current_a.toFixed(3)} A`;
+      document.getElementById('power-val').textContent = `${t.power_w.toFixed(2)} W`;
+
+      // Sensors
+      document.getElementById('tept-lr').textContent = `${t.tept_left} / ${t.tept_right}`;
+      document.getElementById('tept-tb').textContent = `${t.tept_top} / ${t.tept_bottom}`;
+      const inaBadge = document.getElementById('ina-badge');
+      inaBadge.textContent = t.ina219_ok ? 'OK' : 'ERR';
+      inaBadge.className = `badge ${t.ina219_ok ? 'auto' : 'fault'}`;
+
+      // AI Prediction Card
+      if (ai) {
+        document.getElementById('ai-expected').textContent = `${ai.expected_power_w.toFixed(2)} W`;
+        document.getElementById('ai-deficit').textContent = ai.residual_w > 0 ? `-${ai.residual_w.toFixed(2)} W` : '0.00 W';
+        document.getElementById('ai-efficiency').textContent = `${ai.efficiency_pct}%`;
+        document.getElementById('ai-status-text').textContent = ai.status;
+
+        const aiDot = document.getElementById('ai-status-dot');
+        const aiCard = document.getElementById('ai-card');
+        const color = ai.severity === 'good' ? '#22c55e' : (ai.severity === 'caution' ? '#f59e0b' : '#ef4444');
+        aiDot.style.backgroundColor = color;
+        aiCard.style.borderLeftColor = color;
+      }
+
+      // Add to Chart
+      const timeLabel = new Date().toLocaleTimeString();
+      chart.data.labels.push(timeLabel);
+      chart.data.datasets[0].data.push(t.power_w);
+      chart.data.datasets[1].data.push(t.panel_angle_deg);
+
+      if (chart.data.labels.length > MAX_POINTS) {
+        chart.data.labels.shift();
+        chart.data.datasets[0].data.shift();
+        chart.data.datasets[1].data.shift();
+      }
+      chart.update('none'); // Update smoothly without lag
+    }
+
+    // -------------------------------------------------------------
+    // 4. Command Controls (POST /api/commands)
+    // -------------------------------------------------------------
+    async function sendCmd(command, params) {
+      const apiKey = document.getElementById('api-key-input').value;
+      const statusEl = document.getElementById('cmd-status');
+      statusEl.textContent = 'Sending command...';
+
+      try {
+        const res = await fetch('/api/commands', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-API-Key': apiKey
+          },
+          body: JSON.stringify({ command, params })
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          statusEl.textContent = `Command sent! (ID: ${data.cmd_id})`;
+          setTimeout(() => statusEl.textContent = '', 3500);
+        } else {
+          statusEl.textContent = 'Error: Invalid API Key or Command rejected.';
+        }
+      } catch (e) {
+        statusEl.textContent = 'Network error sending command.';
+      }
+    }
+
+    function sendAngle() {
+      const angle = parseFloat(document.getElementById('target-angle-input').value) || 0;
+      sendCmd('go_to_angle', { angle_deg: angle });
+    }
+
+    // Start WebSocket stream on load
+    connectWS();
+  </script>
+</body>
+</html>

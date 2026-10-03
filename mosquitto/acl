@@ -1,0 +1,17 @@
+# ============================================================
+# Mosquitto ACL — Solar Tracker
+# Deny all by default; grant only explicit permissions.
+# ============================================================
+
+# ESP32 device user
+user solartracker
+topic readwrite solar/tracker-01/telemetry
+topic readwrite solar/tracker-01/status
+topic readwrite solar/tracker-01/motor/state
+topic readwrite solar/tracker-01/cmd
+topic readwrite solar/tracker-01/cmd/ack
+topic readwrite solar/tracker-01/alerts
+
+# Python backend / simulator user
+user backend
+topic readwrite solar/#

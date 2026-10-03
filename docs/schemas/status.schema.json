@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "device_id": { "type": "string" },
+    "state": { "type": "string", "enum": ["online", "offline"] },
+    "firmware_version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+    "uptime_ms": { "type": "integer", "minimum": 0 },
+    "ip_address": { "type": "string" },
+    "free_heap": { "type": "integer", "minimum": 0 }
+  },
+  "required": ["schema_version", "device_id", "state", "firmware_version", "uptime_ms"],
+  "additionalProperties": false
+}

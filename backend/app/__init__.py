@@ -1,0 +1,1 @@
+"""Solar Tracker Backend Application."""
