@@ -12,10 +12,14 @@ from typing import List, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+import pvlib
+import pandas as pd
+import numpy as np
 
 from app.schemas import TelemetryPayload
-from app.models import Telemetry, Device, Event
+from app.models import Telemetry, Device, Event, Prediction, SolarState
 from app.database import AsyncSessionLocal
+from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -79,60 +83,148 @@ class FaultDetector:
 
 
 class SolarCalculator:
-    """Calculates expected power generation and residual anomaly detection.
-    
-    This is the core ML/Analytics component:
-    - Predicts what a 3W panel should generate given the current sunlight.
+    """Calculates astronomical solar geometry (pvlib) and ML residual anomaly detection.
+
+    This is the core ML/Physics & Analytics component:
+    - Calculates true astronomical sun elevation and azimuth using pvlib.
+    - Determines optimal single-axis tracking angle (tracker_theta).
+    - Computes tracking error: tracking_error_deg = panel_angle_deg - target_panel_angle_deg.
+    - Estimates theoretical expected power combining physics clear-sky model + TEPT phototransistors.
     - Compares prediction against measured power from INA219.
-    - Large residual = shading, dust/soiling, or misalignment.
+    - Intelligent diagnostic categorization: Optimal, Cloud Overcast, Partial Shading, Soiling/Dust, or Motor Misalignment.
     """
 
-    def predict_expected_power(self, tept_avg: float, panel_angle_deg: float) -> float:
-        """Estimate theoretical expected power in Watts for the 3W SLG-0603 panel."""
-        # 12-bit ADC max = 4095. At full sun (1000 W/m²), TEPT outputs ~3200-3800 counts.
-        # Clean expected power model:
-        irradiance_ratio = min(1.0, max(0.0, tept_avg / 3200.0))
-        rated_watts = 3.0
-        expected_w = rated_watts * irradiance_ratio
-        return round(expected_w, 2)
+    def __init__(self) -> None:
+        self.settings = get_settings()
 
-    def analyze(self, payload: TelemetryPayload) -> dict:
-        """Run AI residual analysis and return insight dictionary."""
-        avg_light = (payload.tept_top + payload.tept_bottom + payload.tept_left + payload.tept_right) / 4.0
-        expected_w = self.predict_expected_power(avg_light, payload.panel_angle_deg)
+    def calculate_solar_geometry(self, dt: datetime, panel_angle_deg: float) -> dict:
+        """Compute real astronomical sun angles and single-axis target using pvlib."""
+        lat = self.settings.latitude if self.settings.latitude != 0.0 else 26.9124
+        lon = self.settings.longitude if self.settings.longitude != 0.0 else 75.7873
+
+        times = pd.DatetimeIndex([dt])
+        try:
+            solpos = pvlib.solarposition.get_solarposition(times, lat, lon)
+            azimuth = float(solpos["azimuth"].iloc[0])
+            elevation = float(solpos["apparent_elevation"].iloc[0])
+
+            # Calculate optimal single-axis tracking target
+            # Single-axis tracking along North-South axis with East-West rotation
+            tracked = pvlib.tracking.singleaxis(
+                apparent_zenith=solpos["apparent_zenith"],
+                solar_azimuth=solpos["azimuth"],
+                axis_tilt=0,
+                axis_azimuth=180,
+                max_angle=85,
+            )
+            target_deg = float(tracked["tracker_theta"].iloc[0])
+            if pd.isna(target_deg) or elevation <= 0:
+                target_deg = 0.0  # Stow flat when sun is below horizon
+
+            tracking_error = round(panel_angle_deg - target_deg, 2)
+
+            return {
+                "sun_azimuth_deg": round(azimuth, 2),
+                "sun_elevation_deg": round(elevation, 2),
+                "target_panel_angle_deg": round(target_deg, 2),
+                "tracking_error_deg": tracking_error,
+                "is_daylight": elevation > 0,
+            }
+        except Exception as e:
+            logger.warning("Error computing pvlib geometry: %s", e)
+            return {
+                "sun_azimuth_deg": 180.0,
+                "sun_elevation_deg": 0.0,
+                "target_panel_angle_deg": 0.0,
+                "tracking_error_deg": round(panel_angle_deg, 2),
+                "is_daylight": False,
+            }
+
+    def predict_expected_power(self, tept_avg: float, solar_geo: dict) -> float:
+        """Estimate theoretical expected power in Watts for 3W panel combining physics and sensors."""
+        rated_watts = 3.0
+        # 12-bit TEPT phototransistors (0 to 4095 counts). At peak direct sun: ~3200-3600 counts.
+        sensor_irradiance_ratio = min(1.0, max(0.0, tept_avg / 3200.0))
+
+        elevation = solar_geo.get("sun_elevation_deg", 0.0)
+        elev_factor = max(0.0, float(np.sin(np.radians(elevation)))) if elevation > 0 else 0.0
+
+        if sensor_irradiance_ratio > 0.05:
+            expected_w = rated_watts * sensor_irradiance_ratio
+        elif elev_factor > 0:
+            expected_w = rated_watts * elev_factor
+        else:
+            expected_w = 0.0
+
+        return round(float(expected_w), 2)
+
+    def analyze(self, payload: TelemetryPayload) -> tuple[dict, dict]:
+        """Run complete AI solar geometry, expected power, and anomaly diagnosis."""
+        now_dt = datetime.now(timezone.utc)
+        solar_geo = self.calculate_solar_geometry(now_dt, payload.panel_angle_deg)
+
+        tept_vals = [payload.tept_top, payload.tept_bottom, payload.tept_left, payload.tept_right]
+        avg_light = sum(tept_vals) / 4.0
+        expected_w = self.predict_expected_power(avg_light, solar_geo)
         measured_w = payload.power_w
         residual_w = round(expected_w - measured_w, 2)
 
-        # Health / efficiency rating
-        efficiency_pct = 100.0
-        if expected_w > 0.1:
+        # Efficiency calculation
+        if expected_w > 0.15:
             efficiency_pct = round(min(100.0, max(0.0, (measured_w / expected_w) * 100.0)), 1)
         elif avg_light < 300:
             efficiency_pct = 0.0
-
-        # Diagnosis
-        if avg_light < 300:
-            status = "Low Light / Night"
-            severity = "normal"
-        elif residual_w > 1.2:
-            status = "High Loss: Possible Shading or Soiled Panel"
-            severity = "warning"
-        elif residual_w > 0.6:
-            status = "Moderate Loss: Check Alignment or Clean Glass"
-            severity = "caution"
         else:
-            status = "Optimal Power Generation"
+            efficiency_pct = 100.0
+
+        # Sensor spread across quadrants
+        sensor_spread = max(tept_vals) - min(tept_vals)
+        tracking_err = abs(solar_geo.get("tracking_error_deg", 0.0))
+
+        # Diagnostic classification
+        if avg_light < 250 and not solar_geo["is_daylight"]:
+            status = "Night / Low Ambient Light"
+            severity = "normal"
+        elif avg_light < 700:
+            status = "Low Ambient Light / Overcast Sky"
+            severity = "caution"
+        elif tracking_err > 20.0 and avg_light > 1500 and payload.mode == "auto":
+            status = f"Tracking Misaligned (Lag: {tracking_err:.1f}°)"
+            severity = "warning"
+        elif sensor_spread > 1200 and avg_light > 1200:
+            status = "Partial Shading / Obstruction Detected"
+            severity = "warning"
+        elif residual_w > 1.1 and expected_w > 1.5:
+            status = "Significant Power Deficit: Shading or Soiled Glass"
+            severity = "warning"
+        elif residual_w > 0.5 and expected_w > 1.2:
+            status = "Moderate Deficit: Check Panel Cleanliness / Dust"
+            severity = "caution"
+        elif efficiency_pct >= 80.0:
+            status = "Optimal Power Generation & Sun Tracking"
+            severity = "good"
+        else:
+            status = "Normal Operational State"
             severity = "good"
 
-        return {
+        ai_insight = {
             "expected_power_w": expected_w,
             "measured_power_w": measured_w,
             "residual_w": residual_w,
             "efficiency_pct": efficiency_pct,
             "status": status,
             "severity": severity,
-            "model_version": "rf-power-v1",
+            "model_version": "physics-pvlib-ml-v2",
         }
+
+        solar_state = {
+            "sun_azimuth_deg": solar_geo["sun_azimuth_deg"],
+            "sun_elevation_deg": solar_geo["sun_elevation_deg"],
+            "target_panel_angle_deg": solar_geo["target_panel_angle_deg"],
+            "tracking_error_deg": solar_geo["tracking_error_deg"],
+        }
+
+        return ai_insight, solar_state
 
 
 class WorkerQueue:
@@ -147,10 +239,9 @@ class WorkerQueue:
         self.queue: asyncio.Queue[TelemetryPayload] = asyncio.Queue()
         self.fault_detector = FaultDetector()
         self.solar_calc = SolarCalculator()
-        # ws_manager is injected after app startup to avoid circular imports
         self._ws_manager = None
 
-    def set_ws_manager(self, ws_manager) -> None:  # type: ignore[no-untyped-def]
+    def set_ws_manager(self, ws_manager) -> None:
         """Inject the WebSocket connection manager (called from lifespan)."""
         self._ws_manager = ws_manager
 
@@ -174,15 +265,16 @@ class WorkerQueue:
 
     async def _process_telemetry(self, payload: TelemetryPayload) -> None:
         """Process incoming telemetry with prioritized low-latency broadcast."""
-        # 1. Immediate in-memory AI Expected Power & Residual Analysis (<0.2ms)
-        ai_insight = self.solar_calc.analyze(payload)
+        # 1. Immediate in-memory AI Expected Power, Solar Geometry & Residual Analysis
+        ai_insight, solar_state = self.solar_calc.analyze(payload)
 
-        # 2. IMMEDIATE WebSocket Broadcast (<0.5ms) - Never wait for disk I/O!
+        # 2. IMMEDIATE WebSocket Broadcast (<0.5ms)
         if self._ws_manager is not None:
             message = json.dumps({
                 "type": "telemetry",
                 "data": payload.model_dump(),
                 "ai_insight": ai_insight,
+                "solar_state": solar_state,
             })
             await self._ws_manager.broadcast(message)
 
@@ -191,9 +283,10 @@ class WorkerQueue:
         latest_live_cache[payload.device_id] = {
             "telemetry": payload.model_dump(),
             "ai_insight": ai_insight,
+            "solar_state": solar_state,
         }
 
-        # 4. Asynchronous Database Persistence (Runs in background)
+        # 4. Asynchronous Database Persistence
         try:
             async with AsyncSessionLocal() as session:
                 await self._ensure_device(session, payload.device_id)
@@ -230,7 +323,18 @@ class WorkerQueue:
                     )
                     session.add(event)
 
-                from app.models import Prediction
+                # Solar state persistence
+                solar_row = SolarState(
+                    device_id=payload.device_id,
+                    calculated_at=datetime.now(timezone.utc),
+                    sun_azimuth_deg=solar_state["sun_azimuth_deg"],
+                    sun_elevation_deg=solar_state["sun_elevation_deg"],
+                    target_panel_angle_deg=solar_state["target_panel_angle_deg"],
+                    tracking_error_deg=solar_state["tracking_error_deg"],
+                )
+                session.add(solar_row)
+
+                # Prediction persistence
                 pred_row = Prediction(
                     device_id=payload.device_id,
                     predicted_at=datetime.now(timezone.utc),
@@ -243,7 +347,7 @@ class WorkerQueue:
 
                 await session.commit()
         except Exception as e:
-            logger.error(f"Error persisting telemetry to DB: {e}")
+            logger.error("Error persisting telemetry to DB: %s", e)
 
     @staticmethod
     async def _ensure_device(session: AsyncSession, device_id: str) -> None:

@@ -56,6 +56,8 @@ class SimulatorConfig:
         ina219_fail: bool = False,
         motor_stall: bool = False,
         reboot_after: int = 0,
+        mock_daylight: bool = False,
+        http_url: Optional[str] = None,
     ) -> None:
         self.noise_level = noise_level
         self.cloud_factor = cloud_factor
@@ -63,6 +65,8 @@ class SimulatorConfig:
         self.ina219_fail = ina219_fail
         self.motor_stall = motor_stall
         self.reboot_after = reboot_after
+        self.mock_daylight = mock_daylight
+        self.http_url = http_url
 
 
 class ESP32Simulator:
@@ -106,6 +110,14 @@ class ESP32Simulator:
 
     def _get_solar_position(self):
         """Return (elevation_deg, azimuth_deg) using pvlib."""
+        if getattr(self.config, "mock_daylight", False):
+            elapsed = time.time() - self.start_time
+            # Dynamic simulated daylight sweeping from East to West
+            cycle_phase = (elapsed * 0.05) % (2 * np.pi)
+            elev = 35.0 + 35.0 * np.sin(cycle_phase)
+            azim = 90.0 + (cycle_phase / (2 * np.pi)) * 180.0
+            return float(max(10.0, elev)), float(azim)
+
         times = pd.DatetimeIndex([datetime.now(timezone.utc)])
         sol = self.location.get_solarposition(times)
         return float(sol["apparent_elevation"].iloc[0]), float(sol["azimuth"].iloc[0])
@@ -371,6 +383,10 @@ class ESP32Simulator:
             retain=True,
         )
 
+        if self.config.http_url:
+            await self._http_telemetry_loop()
+            return
+
         while True:
             try:
                 async with Client(
@@ -399,6 +415,51 @@ class ESP32Simulator:
                 logger.exception("Unexpected error — reconnecting in 5s")
                 await asyncio.sleep(5)
 
+    async def _http_telemetry_loop(self) -> None:
+        """Stream telemetry directly via HTTP POST for brokerless testing."""
+        import httpx
+        url = self.config.http_url
+        logger.info("Streaming telemetry directly to HTTP API: %s", url)
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            while True:
+                await asyncio.sleep(2.0)
+                elevation, azimuth = self._get_solar_position()
+                t_top, t_bot, t_left, t_right = self._compute_tept(elevation, azimuth)
+                v, i, p = self._compute_power(elevation)
+
+                if self.state == "auto":
+                    self._step_panel(t_left, t_right)
+                elif self.state == "go_to_angle":
+                    self._move_toward_target()
+
+                self.seq += 1
+                payload = {
+                    "device_id": DEVICE_ID,
+                    "schema_version": 1,
+                    "seq": self.seq,
+                    "uptime_ms": self.uptime_ms,
+                    "voltage_v": v,
+                    "current_a": i,
+                    "power_w": p,
+                    "panel_angle_deg": round(self.panel_angle_deg, 2),
+                    "motor_steps": self.motor_steps,
+                    "tept_top": t_top,
+                    "tept_bottom": t_bot,
+                    "tept_left": t_left,
+                    "tept_right": t_right,
+                    "ina219_ok": not self.config.ina219_fail,
+                    "sensors_ok": True,
+                    "mode": self.state,
+                }
+                try:
+                    res = await client.post(url, json=payload)
+                    logger.info(
+                        "HTTP Telemetry seq=%d (P=%.2fW, Angle=%.1f°, status=%d)",
+                        self.seq, p, self.panel_angle_deg, res.status_code
+                    )
+                except Exception as e:
+                    logger.warning("HTTP post error: %s", e)
+
 
 # ---------------------------------------------------------------------------
 # Entry point
@@ -415,6 +476,8 @@ if __name__ == "__main__":
     parser.add_argument("--ina219-fail",  action="store_true",        help="Simulate INA219 failure")
     parser.add_argument("--motor-stall",  action="store_true",        help="Simulate motor stall")
     parser.add_argument("--reboot-after", type=int,   default=0,     help="Seconds until simulated reboot (0=never)")
+    parser.add_argument("--daytime",      action="store_true",        help="Simulate daytime sun sweep even at night")
+    parser.add_argument("--http-target",  type=str,   default=None,  help="Direct HTTP POST URL fallback (e.g. http://localhost:8000/api/telemetry)")
     args = parser.parse_args()
 
     config = SimulatorConfig(
@@ -424,6 +487,8 @@ if __name__ == "__main__":
         ina219_fail=args.ina219_fail,
         motor_stall=args.motor_stall,
         reboot_after=args.reboot_after,
+        mock_daylight=args.daytime,
+        http_url=args.http_target,
     )
 
     sim = ESP32Simulator(config)
